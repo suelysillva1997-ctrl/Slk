@@ -1,0 +1,319 @@
+--================== CopyAppearance UI completa ==================--
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local LocalPlayer = Players.LocalPlayer
+
+-- Funções auxiliares
+local function dbg(...) print("[CopyFix]", ...) end
+local function wrn(...) warn("[CopyFix]", ...) end
+
+if not LocalPlayer then wrn("LocalPlayer não encontrado."); return end
+
+-- Snapshot original
+local originalSaved = false
+local originalDescription = nil
+local originalAssets = { Accessories={}, Shirt=nil, Pants=nil, ShirtGraphic=nil, BodyColors=nil, FaceTexture=nil, AccessoryNames={} }
+local originalRigType = nil
+
+local function cloneIfPossible(inst)
+    local ok, c = pcall(function() return inst:Clone() end)
+    return ok and c or nil
+end
+
+local function saveOriginalSnapshot()
+    if originalSaved then return end
+    local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+    local humanoid = char:FindFirstChildOfClass("Humanoid") or char:WaitForChild("Humanoid", 5)
+    if not humanoid then wrn("Humanoid não encontrado ao salvar snapshot."); return end
+    originalRigType = humanoid.RigType
+    local ok, desc = pcall(function() return humanoid:GetAppliedDescription() end)
+    if ok and desc then originalDescription = desc end
+    -- Salva clones manuais
+    originalAssets = { Accessories={}, Shirt=nil, Pants=nil, ShirtGraphic=nil, BodyColors=nil, FaceTexture=nil, AccessoryNames={} }
+    local bc = char:FindFirstChildWhichIsA("BodyColors")
+    if bc then originalAssets.BodyColors = cloneIfPossible(bc) end
+    local shirt = char:FindFirstChildWhichIsA("Shirt")
+    if shirt then originalAssets.Shirt = cloneIfPossible(shirt) end
+    local pants = char:FindFirstChildWhichIsA("Pants")
+    if pants then originalAssets.Pants = cloneIfPossible(pants) end
+    local sg = char:FindFirstChildWhichIsA("ShirtGraphic")
+    if sg then originalAssets.ShirtGraphic = cloneIfPossible(sg) end
+    local head = char:FindFirstChild("Head")
+    if head then
+        local face = head:FindFirstChild("face")
+        if face and face:IsA("Decal") then originalAssets.FaceTexture = face.Texture end
+    end
+    for _,c in ipairs(char:GetChildren()) do
+        if c:IsA("Accessory") then
+            local cloned = cloneIfPossible(c)
+            if cloned then
+                table.insert(originalAssets.Accessories, cloned)
+                originalAssets.AccessoryNames[c.Name] = true
+            end
+        end
+    end
+    originalSaved = true
+    dbg("Snapshot original salvo.")
+end
+
+local function removeVisuals(character)
+    for _,child in ipairs(character:GetChildren()) do
+        if child:IsA("Accessory") or child:IsA("Shirt") or child:IsA("Pants") or child:IsA("ShirtGraphic") or child:IsA("BodyColors") then
+            pcall(function() child:Destroy() end)
+        end
+    end
+    local head = character:FindFirstChild("Head")
+    if head then
+        local face = head:FindFirstChild("face")
+        if face then pcall(function() face:Destroy() end) end
+    end
+end
+
+local function tryAddAccessory(humanoid, accessory)
+    local ok = pcall(function() humanoid:AddAccessory(accessory) end)
+    if ok then return true end
+    accessory.Parent = humanoid.Parent
+    return false
+end
+
+local function manualApplyFromTarget(targetPlayer)
+    if not targetPlayer.Character then wrn("Target sem Character"); return false end
+    local tgt = targetPlayer.Character
+    local myChar = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+    local myHumanoid = myChar:FindFirstChildOfClass("Humanoid") or myChar:WaitForChild("Humanoid",5)
+    if not myHumanoid then wrn("Seu Humanoid não encontrado"); return false end
+
+    removeVisuals(myChar)
+
+    local tgtBC = tgt:FindFirstChildWhichIsA("BodyColors")
+    if tgtBC then cloneIfPossible(tgtBC).Parent = myChar end
+
+    local function copyCl(className)
+        local t = tgt:FindFirstChildWhichIsA(className)
+        if t then local c = cloneIfPossible(t) if c then c.Parent = myChar end end
+    end
+    copyCl("Shirt")
+    copyCl("Pants")
+    copyCl("ShirtGraphic")
+
+    local tgtHead = tgt:FindFirstChild("Head")
+    local myHead = myChar:FindFirstChild("Head")
+    if tgtHead and myHead then
+        local face = tgtHead:FindFirstChild("face")
+        if face then local dec = Instance.new("Decal") dec.Name="face" dec.Texture=face.Texture dec.Parent=myHead end
+    end
+
+    for _,c in ipairs(tgt:GetChildren()) do
+        if c:IsA("Accessory") then
+            local cloned = cloneIfPossible(c)
+            if cloned then tryAddAccessory(myHumanoid, cloned) end
+        end
+    end
+    dbg("Manual apply concluído.")
+    return true
+end
+
+local function copyAppearance(targetPlayer)
+    if not targetPlayer or targetPlayer == LocalPlayer then wrn("Target inválido"); return end
+    if not targetPlayer.Character then wrn("Target sem Character"); return end
+    if not originalSaved then saveOriginalSnapshot() end
+
+    local myChar = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+    local myHumanoid = myChar:FindFirstChildOfClass("Humanoid") or myChar:WaitForChild("Humanoid",5)
+    if not myHumanoid then wrn("Humanoid não encontrado"); return end
+
+    local ok, desc = pcall(function() return Players:GetHumanoidDescriptionFromUserId(targetPlayer.UserId) end)
+    if ok and desc then
+        local targetHum = targetPlayer.Character:FindFirstChildOfClass("Humanoid")
+        if targetHum and targetHum.RigType ~= myHumanoid.RigType then
+            wrn("Rig diferente, fallback manual")
+            manualApplyFromTarget(targetPlayer)
+            return
+        end
+        local appliedOk, err = pcall(function() myHumanoid:ApplyDescription(desc) end)
+        if appliedOk then
+            dbg("ApplyDescription aplicado com sucesso.")
+            task.wait(0.12)
+            for _,c in ipairs(myChar:GetChildren()) do if c:IsA("Accessory") then pcall(function() c:Destroy() end) end end
+            for _,c in ipairs(targetPlayer.Character:GetChildren()) do
+                if c:IsA("Accessory") then
+                    local clone = cloneIfPossible(c)
+                    if clone then tryAddAccessory(myHumanoid, clone) end
+                end
+            end
+            return
+        else
+            wrn("ApplyDescription falhou, fallback manual")
+            manualApplyFromTarget(targetPlayer)
+            return
+        end
+    else
+        wrn("GetHumanoidDescriptionFromUserId falhou, fallback manual")
+        manualApplyFromTarget(targetPlayer)
+        return
+    end
+end
+
+local function revertAppearance()
+    if not originalSaved then wrn("Nenhum snapshot original salvo"); return end
+    local myChar = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+    local myHumanoid = myChar:FindFirstChildOfClass("Humanoid") or myChar:WaitForChild("Humanoid",5)
+    if not myHumanoid then wrn("Humanoid não encontrado (revert)"); return end
+
+    if originalDescription and myHumanoid.RigType==originalRigType then
+        local ok, err = pcall(function() myHumanoid:ApplyDescription(originalDescription) end)
+        if ok then
+            dbg("Revert ApplyDescription aplicado.")
+            task.wait(0.12)
+            for _,c in ipairs(myChar:GetChildren()) do if c:IsA("Accessory") then pcall(function() c:Destroy() end) end end
+            for _,acc in ipairs(originalAssets.Accessories) do local clone=cloneIfPossible(acc) if clone then tryAddAccessory(myHumanoid, clone) end end
+            if originalAssets.BodyColors then originalAssets.BodyColors:Clone().Parent=myChar end
+            if originalAssets.Shirt then originalAssets.Shirt:Clone().Parent=myChar end
+            if originalAssets.Pants then originalAssets.Pants:Clone().Parent=myChar end
+            if originalAssets.ShirtGraphic then originalAssets.ShirtGraphic:Clone().Parent=myChar end
+            if originalAssets.FaceTexture and myChar:FindFirstChild("Head") then
+                local f=Instance.new("Decal") f.Name="face" f.Texture=originalAssets.FaceTexture f.Parent=myChar.Head
+            end
+            dbg("Revert completo via ApplyDescription + clones.")
+            return
+        else
+            wrn("ApplyDescription revert falhou, revert manual")
+        end
+    end
+    removeVisuals(myChar)
+    if originalAssets.BodyColors then originalAssets.BodyColors:Clone().Parent=myChar end
+    if originalAssets.Shirt then originalAssets.Shirt:Clone().Parent=myChar end
+    if originalAssets.Pants then originalAssets.Pants:Clone().Parent=myChar end
+    if originalAssets.ShirtGraphic then originalAssets.ShirtGraphic:Clone().Parent=myChar end
+    if originalAssets.FaceTexture and myChar:FindFirstChild("Head") then
+        local f=Instance.new("Decal") f.Name="face" f.Texture=originalAssets.FaceTexture f.Parent=myChar.Head
+    end
+    for _,acc in ipairs(originalAssets.Accessories) do local clone=cloneIfPossible(acc) if clone then tryAddAccessory(myHumanoid, clone) end end
+    dbg("Revert manual aplicado.")
+end
+
+--================== UI ==================--
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "CopyFixUI"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+local frame = Instance.new("Frame", screenGui)
+frame.Size = UDim2.new(0, 280, 0, 200)
+frame.Position = UDim2.new(0, 20, 0, 60)
+frame.BackgroundColor3 = Color3.fromRGB(30,30,30)
+Instance.new("UICorner", frame).CornerRadius=UDim.new(0,6)
+
+local closeBtn = Instance.new("TextButton", frame)
+closeBtn.Size=UDim2.new(0,24,0,24)
+closeBtn.Position=UDim2.new(1,-28,0,4)
+closeBtn.Text="X"
+closeBtn.TextColor3=Color3.fromRGB(255,255,255)
+closeBtn.BackgroundColor3=Color3.fromRGB(180,50,50)
+Instance.new("UICorner", closeBtn).CornerRadius=UDim.new(0,4)
+
+local openBtn = Instance.new("TextButton", screenGui)
+openBtn.Size=UDim2.new(0,60,0,28)
+openBtn.Position=UDim2.new(0,20,0,60)
+openBtn.Text="Abrir UI"
+openBtn.TextColor3=Color3.fromRGB(255,255,255)
+openBtn.BackgroundColor3=Color3.fromRGB(50,150,255)
+Instance.new("UICorner", openBtn).CornerRadius=UDim.new(0,4)
+
+local title = Instance.new("TextLabel", frame)
+title.Size=UDim2.new(1,-12,0,24)
+title.Position=UDim2.new(0,6,0,6)
+title.BackgroundTransparency=1
+title.Text="Copiar Aparência (Fix)"
+title.TextColor3=Color3.new(1,1,1)
+title.Font=Enum.Font.GothamBold
+title.TextSize=14
+title.TextXAlignment=Enum.TextXAlignment.Left
+
+local inputBox = Instance.new("TextBox", frame)
+inputBox.Size=UDim2.new(1,-12,0,24)
+inputBox.Position=UDim2.new(0,6,0,36)
+inputBox.PlaceholderText="Digite nome ou clique na lista"
+inputBox.BackgroundColor3=Color3.fromRGB(45,45,45)
+inputBox.TextColor3=Color3.new(1,1,1)
+Instance.new("UICorner", inputBox).CornerRadius=UDim.new(0,4)
+
+local copyBtn = Instance.new("TextButton", frame)
+copyBtn.Size=UDim2.new(0,80,0,28)
+copyBtn.Position=UDim2.new(0,6,0,64)
+copyBtn.Text="Copiar"
+copyBtn.Font=Enum.Font.GothamBold
+copyBtn.TextSize=12
+copyBtn.BackgroundColor3=Color3.fromRGB(82,167,255)
+Instance.new("UICorner", copyBtn).CornerRadius=UDim.new(0,4)
+
+local revertBtn = Instance.new("TextButton", frame)
+revertBtn.Size=UDim2.new(0,80,0,28)
+revertBtn.Position=UDim2.new(0,96,0,64)
+revertBtn.Text="Reverter"
+revertBtn.Font=Enum.Font.GothamBold
+revertBtn.TextSize=12
+revertBtn.BackgroundColor3=Color3.fromRGB(255,90,90)
+Instance.new("UICorner", revertBtn).CornerRadius=UDim.new(0,4)
+
+local refreshBtn = Instance.new("TextButton", frame)
+refreshBtn.Size=UDim2.new(0,80,0,24)
+refreshBtn.Position=UDim2.new(0,186,0,68)
+refreshBtn.Text="Atualizar"
+refreshBtn.Font=Enum.Font.Gotham
+refreshBtn.TextSize=10
+refreshBtn.BackgroundColor3=Color3.fromRGB(60,60,60)
+Instance.new("UICorner", refreshBtn).CornerRadius=UDim.new(0,4)
+
+local playersFrame = Instance.new("ScrollingFrame", frame)
+playersFrame.Size=UDim2.new(1,-12,0,100)
+playersFrame.Position=UDim2.new(0,6,0,100)
+playersFrame.CanvasSize=UDim2.new(0,0,0,0)
+playersFrame.BackgroundTransparency=1
+playersFrame.BorderSizePixel=0
+local plLayout = Instance.new("UIListLayout", playersFrame)
+plLayout.Padding=UDim.new(0,4)
+plLayout.SortOrder=Enum.SortOrder.LayoutOrder
+
+local function populatePlayers()
+    for _,c in ipairs(playersFrame:GetChildren()) do if c:IsA("TextButton") then c:Destroy() end end
+    local y = 0
+    for i,p in ipairs(Players:GetPlayers()) do
+        local btn = Instance.new("TextButton", playersFrame)
+        btn.Size=UDim2.new(1,-8,0,22)
+        btn.Position=UDim2.new(0,4,0,y)
+        btn.BackgroundColor3=Color3.fromRGB(60,60,60)
+        btn.TextColor3=Color3.new(1,1,1)
+        btn.Font=Enum.Font.Gotham
+        btn.TextSize=12
+        btn.Text=p.Name..(p==LocalPlayer and " (você)" or "")
+        Instance.new("UICorner", btn).CornerRadius=UDim.new(0,4)
+        btn.MouseButton1Click:Connect(function() inputBox.Text = p.Name end)
+        y=y+26
+    end
+    playersFrame.CanvasSize=UDim2.new(0,0,0,y)
+end
+
+populatePlayers()
+Players.PlayerAdded:Connect(populatePlayers)
+Players.PlayerRemoving:Connect(populatePlayers)
+refreshBtn.MouseButton1Click:Connect(populatePlayers)
+
+copyBtn.MouseButton1Click:Connect(function()
+    local name=inputBox.Text and inputBox.Text:match("^%s*(.-)%s*$")
+    if not name or name=="" then wrn("Digite ou selecione um nome."); return end
+    local target=nil
+    for _,p in pairs(Players:GetPlayers()) do
+        if p.Name:lower()==name:lower() or (p.DisplayName and p.DisplayName:lower()==name:lower()) then target=p; break end
+    end
+    if not target then wrn("Jogador não encontrado: "..tostring(name)); return end
+    copyAppearance(target)
+end)
+
+revertBtn.MouseButton1Click:Connect(function() revertAppearance() end)
+
+closeBtn.MouseButton1Click:Connect(function() frame.Visible=false; openBtn.Visible=true end)
+openBtn.MouseButton1Click:Connect(function() frame.Visible=true; openBtn.Visible=false end)
+
+frame.Visible=true
+openBtn.Visible=false
